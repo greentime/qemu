@@ -49,6 +49,7 @@
 #include "hw/riscv/sifive_clint.h"
 #include "hw/riscv/sifive_uart.h"
 #include "hw/riscv/sifive_u.h"
+#include "hw/riscv/virt.h"
 #include "hw/riscv/boot.h"
 #include "chardev/char.h"
 #include "net/eth.h"
@@ -75,6 +76,7 @@ static const struct MemmapEntry {
     [SIFIVE_U_L2LIM] =    {  0x8000000,  0x2000000 },
     [SIFIVE_U_PLIC] =     {  0xc000000,  0x4000000 },
     [SIFIVE_U_PRCI] =     { 0x10000000,     0x1000 },
+    [VIRT_VIRTIO] =       { 0x10001000,     0x1000 },
     [SIFIVE_U_UART0] =    { 0x10010000,     0x1000 },
     [SIFIVE_U_UART1] =    { 0x10011000,     0x1000 },
     [SIFIVE_U_GPIO] =     { 0x10060000,     0x1000 },
@@ -94,7 +96,7 @@ static void create_fdt(SiFiveUState *s, const struct MemmapEntry *memmap,
 {
     MachineState *ms = MACHINE(qdev_get_machine());
     void *fdt;
-    int cpu;
+    int cpu, i;
     uint32_t *cells;
     char *nodename;
     char ethclk_names[] = "pclk\0hclk";
@@ -271,6 +273,19 @@ static void create_fdt(SiFiveUState *s, const struct MemmapEntry *memmap,
     plic_phandle = qemu_fdt_get_phandle(fdt, nodename);
     g_free(cells);
     g_free(nodename);
+
+    for (i = 0; i < VIRTIO_COUNT; i++) {
+        nodename = g_strdup_printf("/virtio_mmio@%lx",
+            (long)(memmap[VIRT_VIRTIO].base + i * memmap[VIRT_VIRTIO].size));
+        qemu_fdt_add_subnode(fdt, nodename);
+        qemu_fdt_setprop_string(fdt, nodename, "compatible", "virtio,mmio");
+        qemu_fdt_setprop_cells(fdt, nodename, "reg",
+            0x0, memmap[VIRT_VIRTIO].base + i * memmap[VIRT_VIRTIO].size,
+            0x0, memmap[VIRT_VIRTIO].size);
+        qemu_fdt_setprop_cell(fdt, nodename, "interrupt-parent", plic_phandle);
+        qemu_fdt_setprop_cell(fdt, nodename, "interrupts", VIRTIO_IRQ + i);
+        g_free(nodename);
+    }
 
     gpio_phandle = phandle++;
     nodename = g_strdup_printf("/soc/gpio@%lx",
@@ -733,6 +748,13 @@ static void sifive_u_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("riscv.sifive.u.dmc",
         memmap[SIFIVE_U_DMC].base, memmap[SIFIVE_U_DMC].size);
+
+    for (i = 0; i < VIRTIO_COUNT; i++) {
+        sysbus_create_simple("virtio-mmio",
+            memmap[VIRT_VIRTIO].base + i * memmap[VIRT_VIRTIO].size,
+            qdev_get_gpio_in(DEVICE(s->plic), VIRTIO_IRQ + i));
+    }
+
 }
 
 static Property sifive_u_soc_props[] = {
